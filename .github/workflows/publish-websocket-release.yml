@@ -44,7 +44,7 @@ jobs:
           checkout = "      - name: Checkout patched source\n        uses: actions/checkout@v4\n        with:\n          path: source\n          submodules: recursive\n"
           workflow = workflow[:start] + checkout + workflow[end:]
           workflow = workflow.replace("  push:\n    branches: ['build/websocket-windows']\n    paths: ['.github/workflows/windows-test-build.yml']\n", "")
-          Path("source/.github/workflows/windows-test-build.yml").write_text(workflow)
+          # Application source commits deliberately exclude CI workflow changes.
           PY
           git -C source apply ../rustdesk.patch
           git -C source/libs/hbb_common apply ../../../hbb.patch
@@ -53,8 +53,9 @@ jobs:
           git -C source/libs/hbb_common config user.name "Baron You"
           git -C source/libs/hbb_common config user.email "20738423+baron0426@users.noreply.github.com"
           git -C source/libs/hbb_common add src/config.rs src/websocket.rs
-          git -C source/libs/hbb_common commit -m "feat: support custom WebSocket ID and relay endpoints"
-          git -C source/libs/hbb_common push https://github.com/baron0426/rustdesk.git HEAD:refs/heads/hbb-common-websocket
+          git -C source/libs/hbb_common fetch https://github.com/baron0426/rustdesk.git hbb-common-websocket
+          git -C source/libs/hbb_common diff --exit-code FETCH_HEAD
+          git -C source/libs/hbb_common reset --hard FETCH_HEAD
           git -C source config -f .gitmodules submodule.libs/hbb_common.url https://github.com/baron0426/rustdesk.git
           git -C source config -f .gitmodules submodule.libs/hbb_common.branch hbb-common-websocket
           mkdir -p source/docs
@@ -63,7 +64,7 @@ jobs:
 
           This branch contains the application changes used for the Windows x64 test build, based on RustDesk commit 0bc2473ffe95934408150d48633cd50344c55960. The shared-library change is based on hbb_common commit 229b904508364c8997aad0fb5af57effac859f60 and is tracked as a submodule commit on this repository's hbb-common-websocket branch.
 
-          Clone with git clone --recurse-submodules. The Windows workflow can be run manually on this branch.
+          Clone with git clone --recurse-submodules. The original Windows build workflow is preserved on the build/websocket-windows branch. Build the application with the official Windows prerequisites and python build.py --flutter --skip-portable-pack.
 
           Set WebSocket ID Server and WebSocket Relay Server in Settings > Network > ID/Relay Server. Bare host[:port] uses wss and the default /ws/id or /ws/relay path; full ws:// or wss:// URLs preserve the specified path. An explicit trailing / selects the root path.
 
@@ -77,7 +78,7 @@ jobs:
           DOC
           git -C source config user.name "Baron You"
           git -C source config user.email "20738423+baron0426@users.noreply.github.com"
-          git -C source add .gitmodules libs/hbb_common flutter libs/base/src/config/keys.rs src/flutter_ffi.rs src/ipc.rs src/lang .github/workflows/windows-test-build.yml docs/websocket-test-release.md
+          git -C source add .gitmodules libs/hbb_common flutter libs/base/src/config/keys.rs src/flutter_ffi.rs src/ipc.rs src/lang docs/websocket-test-release.md
           git -C source commit -m "feat: add configurable WebSocket ID and relay servers"
           git -C source push origin HEAD:refs/heads/release/websocket-custom-endpoints
           echo "sha=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
