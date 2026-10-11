@@ -1,0 +1,123 @@
+name: Publish WebSocket Windows test release
+on:
+  push:
+    branches: ['build/websocket-windows']
+    paths: ['.github/workflows/publish-websocket-release.yml']
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pipeline
+      - name: Commit the exact application and shared-library patches
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git clone --filter=blob:none --no-checkout https://github.com/baron0426/rustdesk.git source
+          git -C source checkout 0bc2473ffe95934408150d48633cd50344c55960
+          git -C source submodule update --init --recursive
+          python3 - <<'PY'
+          import re, gzip, base64
+          from pathlib import Path
+          workflow = Path("pipeline/.github/workflows/windows-test-build.yml").read_text()
+          for encoded, name in re.findall(r"Write-Patch '([^']+)' '(rustdesk\.patch|hbb\.patch)'", workflow):
+              Path(name).write_bytes(gzip.decompress(base64.b64decode(encoded)))
+          start = workflow.index("      - name: Get pinned source and apply both patches")
+          end = workflow.index("      - name: Set up Python", start)
+          checkout = """      - name: Checkout patched source
+                  uses: actions/checkout@v4
+                  with:
+                    path: source
+                    submodules: recursive
+          """
+          # Keep the checkout indentation identical to the surrounding steps.
+          checkout = "\n".join(line[8:] if line.startswith("        ") else line for line in checkout.split("\n"))
+          checkout = "      - name: Checkout patched source\n        uses: actions/checkout@v4\n        with:\n          path: source\n          submodules: recursive\n"
+          workflow = workflow[:start] + checkout + workflow[end:]
+          workflow = workflow.replace("  push:\n    branches: ['build/websocket-windows']\n    paths: ['.github/workflows/windows-test-build.yml']\n", "")
+          Path("source/.github/workflows/windows-test-build.yml").write_text(workflow)
+          PY
+          git -C source apply ../rustdesk.patch
+          git -C source/libs/hbb_common apply ../../../hbb.patch
+          git -C source diff --check
+          git -C source/libs/hbb_common diff --check
+          git -C source/libs/hbb_common config user.name "Baron You"
+          git -C source/libs/hbb_common config user.email "20738423+baron0426@users.noreply.github.com"
+          git -C source/libs/hbb_common add src/config.rs src/websocket.rs
+          git -C source/libs/hbb_common commit -m "feat: support custom WebSocket ID and relay endpoints"
+          git -C source/libs/hbb_common push https://github.com/baron0426/rustdesk.git HEAD:refs/heads/hbb-common-websocket
+          git -C source config -f .gitmodules submodule.libs/hbb_common.url https://github.com/baron0426/rustdesk.git
+          git -C source config -f .gitmodules submodule.libs/hbb_common.branch hbb-common-websocket
+          mkdir -p source/docs
+          cat > source/docs/websocket-test-release.md <<'DOC'
+          # Custom WebSocket endpoint test release
+
+          This branch contains the application changes used for the Windows x64 test build, based on RustDesk commit 0bc2473ffe95934408150d48633cd50344c55960. The shared-library change is based on hbb_common commit 229b904508364c8997aad0fb5af57effac859f60 and is tracked as a submodule commit on this repository's hbb-common-websocket branch.
+
+          Clone with git clone --recurse-submodules. The Windows workflow can be run manually on this branch.
+
+          Set WebSocket ID Server and WebSocket Relay Server in Settings > Network > ID/Relay Server. Bare host[:port] uses wss and the default /ws/id or /ws/relay path; full ws:// or wss:// URLs preserve the specified path. An explicit trailing / selects the root path.
+
+          The released ZIP is the original successful Actions artifact from run 38053558574. Its SHA-256 is 462c63b262c88ea178cbee34c6a50153f8058af1cc823e5f63302eb4975ea8ba. The binary was built before this source publication; only submodule tracking, build-workflow plumbing, and this documentation were added for publication.
+
+          Validation: Windows x64 build passed; ZIP integrity, x64 PE files and WebSocket option strings were verified. Model and selected shared-library regression tests passed during patch preparation. Live BetterDesk connectivity remains unverified.
+
+          Regression surface: the network-settings dialog, server-config import/export and validation, option persistence/restart notifications, and shared-library WebSocket URL selection. Translation files add the new settings labels. Existing URL selection remains the fallback when no matching custom endpoint is configured.
+
+          Known limits: the client uses the official RustDesk service and configuration identity. If the official client is installed, Start service uses the installed executable. Back up the installed application directory and replace the complete application bundle to test the patched service, or use a separate test machine. Older BetterDesk versions may reject mixed WebSocket/native relay sessions; test both peers with WebSocket enabled.
+          DOC
+          git -C source config user.name "Baron You"
+          git -C source config user.email "20738423+baron0426@users.noreply.github.com"
+          git -C source add .gitmodules libs/hbb_common flutter libs/base/src/config/keys.rs src/flutter_ffi.rs src/ipc.rs src/lang .github/workflows/windows-test-build.yml docs/websocket-test-release.md
+          git -C source commit -m "feat: add configurable WebSocket ID and relay servers"
+          git -C source push origin HEAD:refs/heads/release/websocket-custom-endpoints
+          echo "sha=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Publish the original verified ZIP
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const {owner, repo} = context.repo;
+            const artifact = await github.rest.actions.downloadArtifact({owner, repo, artifact_id: 11671642077, archive_format: 'zip'});
+            const data = Buffer.from(artifact.data);
+            const digest = crypto.createHash('sha256').update(data).digest('hex');
+            if (digest !== '462c63b262c88ea178cbee34c6a50153f8058af1cc823e5f63302eb4975ea8ba') throw new Error('Artifact SHA-256 mismatch');
+            const release = await github.rest.repos.createRelease({
+              owner, repo, tag_name: 'v1.5.0-websocket-test.1',
+              target_commitish: process.env.SOURCE_SHA,
+              name: 'RustDesk 1.5.0 — Custom WebSocket endpoints (Windows x64 test)',
+              draft: false, prerelease: true,
+              body: [
+                'Windows x64 測試版：在「設定 → 網路 → ID／中繼伺服器」自訂 WebSocket ID／Relay 的 Host、Port 與 URL。',
+                '',
+                '下載並完整解壓 rustdesk-websocket-windows-x64.zip，執行 rustdesk.exe，保留所有 DLL 與 data 資料夾。',
+                '',
+                '此 ZIP 與先前提供的測試包完全相同，並未重新編譯。建置紀錄：https://github.com/baron0426/rustdesk/actions/runs/38053558574',
+                '',
+                '原始碼：release/websocket-custom-endpoints；hbb_common 修改：hbb-common-websocket。請使用 git clone --recurse-submodules。',
+                '',
+                '已通過 Windows 編譯與壓縮檔完整性檢查；未簽章，尚未實測連接使用者的 BetterDesk。',
+                '',
+                '已知限制：沿用官方 RustDesk 的服務與設定識別。若已安裝官方版，「啟動服務」會執行安裝目錄中的版本，請先備份並替換完整應用程式資料夾，或使用獨立測試機。較舊的 BetterDesk 可能拒絕混合 WebSocket／原生中繼連線。',
+                '',
+                'SHA-256: 462c63b262c88ea178cbee34c6a50153f8058af1cc823e5f63302eb4975ea8ba'
+              ].join('\n')
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id: release.data.id,
+              name: 'rustdesk-websocket-windows-x64.zip', data,
+              headers: {'content-type': 'application/zip', 'content-length': data.length}
+            });
+            core.info(release.data.html_url);
