@@ -75,15 +75,31 @@ void showServerSettingsWithValue(
   final apiCtrl = TextEditingController(text: serverConfig.apiServer);
   final keyCtrl = TextEditingController(text: serverConfig.key);
 
+  final websocketIdCtrl =
+      TextEditingController(text: serverConfig.websocketIdServer);
+  final websocketRelayCtrl =
+      TextEditingController(text: serverConfig.websocketRelayServer);
+
   RxString idServerMsg = ''.obs;
   RxString relayServerMsg = ''.obs;
   RxString apiServerMsg = ''.obs;
+  RxString websocketIdMsg = ''.obs;
+  RxString websocketRelayMsg = ''.obs;
 
-  final controllers = [idCtrl, relayCtrl, apiCtrl, keyCtrl];
+  final controllers = [
+    idCtrl,
+    relayCtrl,
+    apiCtrl,
+    keyCtrl,
+    websocketIdCtrl,
+    websocketRelayCtrl
+  ];
   final errMsgs = [
     idServerMsg,
     relayServerMsg,
     apiServerMsg,
+    websocketIdMsg,
+    websocketRelayMsg,
   ];
 
   dialogManager.show((setState, close, context) {
@@ -98,7 +114,9 @@ void showServerSettingsWithValue(
               idServer: idCtrl.text.trim(),
               relayServer: relayCtrl.text.trim(),
               apiServer: apiCtrl.text.trim(),
-              key: keyCtrl.text.trim()));
+              key: keyCtrl.text.trim(),
+              websocketIdServer: websocketIdCtrl.text.trim(),
+              websocketRelayServer: websocketRelayCtrl.text.trim()));
       setState(() {
         isInProgress = false;
       });
@@ -177,6 +195,20 @@ void showServerSettingsWithValue(
                   ),
                   SizedBox(height: 8),
                   buildField('Key', keyCtrl, ''),
+                  if (!isWeb &&
+                      !isIOS &&
+                      bind.mainGetBuildinOption(
+                              key: 'hide-websocket-settings') !=
+                          'Y') ...[
+                    SizedBox(height: 16),
+                    Text(translate('websocket_server_tip')),
+                    SizedBox(height: 8),
+                    buildField(translate('WebSocket ID Server'),
+                        websocketIdCtrl, websocketIdMsg.value),
+                    SizedBox(height: 8),
+                    buildField(translate('WebSocket Relay Server'),
+                        websocketRelayCtrl, websocketRelayMsg.value),
+                  ],
                   if (isInProgress)
                     Padding(
                       padding: EdgeInsets.only(top: 8),

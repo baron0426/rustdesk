@@ -246,6 +246,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("download-new-version-failed-tip", "Download failed. You can try again or click the \"Download\" button to download from the release page and upgrade manually."),
         ("update-failed-check-msi-tip", "Installation method check failed. Please click the \"Download\" button to download from the release page and upgrade manually."),
         ("websocket_tip", "When using WebSocket, only relay connections are supported."),
+        ("websocket_server_tip", "Optional WebSocket endpoints. Enter Host[:Port] (uses TLS) or a full ws:// or wss:// URL. Leave empty to use the default. Enable Use WebSocket in Network settings."),
+        ("invalid_websocket_server", "Enter Host[:Port] or a valid ws:// or wss:// URL (port 1–65535, no credentials or fragment)."),
         ("terminal-admin-login-tip", "Please input the administrator username and password of the controlled side."),
         ("elevation_username_tip", "Input username or domain\\username"),
         ("allow-insecure-tls-fallback-tip", "By default, RustDesk verifies the server certificate for protocols using TLS.\nWith this option enabled, RustDesk will fall back to skipping the verification step and proceed in case of verification failure."),

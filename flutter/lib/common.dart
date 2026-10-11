@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'common/server_config.dart';
+export 'common/server_config.dart';
+
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
@@ -2918,61 +2921,6 @@ bool get kUseCompatibleUiMode =>
 
 bool get isWin10 => windowsBuildNumber.windowsVersion == WindowsTarget.w10;
 
-class ServerConfig {
-  late String idServer;
-  late String relayServer;
-  late String apiServer;
-  late String key;
-
-  ServerConfig(
-      {String? idServer, String? relayServer, String? apiServer, String? key}) {
-    this.idServer = idServer?.trim() ?? '';
-    this.relayServer = relayServer?.trim() ?? '';
-    this.apiServer = apiServer?.trim() ?? '';
-    this.key = key?.trim() ?? '';
-  }
-
-  /// decode from shared string (from user shared or rustdesk-server generated)
-  /// also see [encode]
-  /// throw when decoding failure
-  ServerConfig.decode(String msg) {
-    var json = {};
-    try {
-      // back compatible
-      json = jsonDecode(msg);
-    } catch (err) {
-      final input = msg.split('').reversed.join('');
-      final bytes = base64Decode(base64.normalize(input));
-      json = jsonDecode(utf8.decode(bytes, allowMalformed: true));
-    }
-    idServer = json['host'] ?? '';
-    relayServer = json['relay'] ?? '';
-    apiServer = json['api'] ?? '';
-    key = json['key'] ?? '';
-  }
-
-  /// encode to shared string
-  /// also see [ServerConfig.decode]
-  String encode() {
-    Map<String, String> config = {};
-    config['host'] = idServer.trim();
-    config['relay'] = relayServer.trim();
-    config['api'] = apiServer.trim();
-    config['key'] = key.trim();
-    return base64UrlEncode(Uint8List.fromList(jsonEncode(config).codeUnits))
-        .split('')
-        .reversed
-        .join();
-  }
-
-  /// from local options
-  ServerConfig.fromOptions(Map<String, dynamic> options)
-      : idServer = options['custom-rendezvous-server'] ?? "",
-        relayServer = options['relay-server'] ?? "",
-        apiServer = options['api-server'] ?? "",
-        key = options['key'] ?? "";
-}
-
 Widget dialogButton(String text,
     {required VoidCallback? onPressed,
     bool isOutline = false,
@@ -3594,12 +3542,31 @@ Future<bool> setServerConfig(
   config.relayServer = removeEndSlash(config.relayServer.trim());
   config.apiServer = removeEndSlash(config.apiServer.trim());
   config.key = config.key.trim();
+  config.websocketIdServer = config.websocketIdServer.trim();
+  config.websocketRelayServer = config.websocketRelayServer.trim();
+  errMsgs?.forEach((msg) => msg.value = '');
   if (controllers != null) {
     controllers[0].text = config.idServer;
     controllers[1].text = config.relayServer;
     controllers[2].text = config.apiServer;
     controllers[3].text = config.key;
+    controllers[4].text = config.websocketIdServer;
+    controllers[5].text = config.websocketRelayServer;
   }
+  final websocketServers = [
+    config.websocketIdServer,
+    config.websocketRelayServer
+  ];
+  var validWebSocketServers = true;
+  for (var i = 0; i < websocketServers.length; i++) {
+    if (!isValidWebSocketServer(websocketServers[i])) {
+      if (errMsgs != null) {
+        errMsgs[3 + i].value = translate('invalid_websocket_server');
+      }
+      validWebSocketServers = false;
+    }
+  }
+  if (!validWebSocketServers) return false;
   // id
   if (config.idServer.isNotEmpty && errMsgs != null) {
     errMsgs[0].value = translate(await bind.mainTestIfValidServer(
@@ -3633,6 +3600,10 @@ Future<bool> setServerConfig(
   await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
   await bind.mainSetOption(key: 'api-server', value: config.apiServer);
   await bind.mainSetOption(key: 'key', value: config.key);
+  await bind.mainSetOption(
+      key: kOptionWebSocketIdServer, value: config.websocketIdServer);
+  await bind.mainSetOption(
+      key: kOptionWebSocketRelayServer, value: config.websocketRelayServer);
   final newApiServer = await bind.mainGetApiServer();
   if (oldApiServer.isNotEmpty &&
       oldApiServer != newApiServer &&

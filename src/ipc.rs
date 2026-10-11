@@ -776,6 +776,8 @@ pub struct CheckIfRestart {
     audio_input: String,
     voice_call_input: String,
     ws: String,
+    websocket_id_server: String,
+    websocket_relay_server: String,
     disable_udp: String,
     allow_insecure_tls_fallback: String,
     api_server: String,
@@ -789,6 +791,8 @@ impl CheckIfRestart {
             audio_input: Config::get_option("audio-input"),
             voice_call_input: Config::get_option("voice-call-input"),
             ws: Config::get_option(OPTION_ALLOW_WEBSOCKET),
+            websocket_id_server: Config::get_option(keys::OPTION_WEBSOCKET_ID_SERVER),
+            websocket_relay_server: Config::get_option(keys::OPTION_WEBSOCKET_RELAY_SERVER),
             disable_udp: Config::get_option(keys::OPTION_DISABLE_UDP),
             allow_insecure_tls_fallback: Config::get_option(
                 keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK,
@@ -808,6 +812,8 @@ impl Drop for CheckIfRestart {
             || self.stop_service != Config::get_option("stop-service")
             || self.rendezvous_servers != Config::get_rendezvous_servers()
             || self.ws != Config::get_option(OPTION_ALLOW_WEBSOCKET)
+            || self.websocket_id_server != Config::get_option(keys::OPTION_WEBSOCKET_ID_SERVER)
+            || self.websocket_relay_server != Config::get_option(keys::OPTION_WEBSOCKET_RELAY_SERVER)
             || self.disable_udp != Config::get_option(keys::OPTION_DISABLE_UDP)
             || self.api_server != Config::get_option("api-server")
         {

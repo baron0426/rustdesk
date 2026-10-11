@@ -193,7 +193,9 @@ List<Widget> ServerConfigImportExportWidgets(
             idServer: controllers[0].text.trim(),
             relayServer: controllers[1].text.trim(),
             apiServer: controllers[2].text.trim(),
-            key: controllers[3].text.trim())
+            key: controllers[3].text.trim(),
+            websocketIdServer: controllers[4].text.trim(),
+            websocketRelayServer: controllers[5].text.trim())
         .encode();
     debugPrint("ServerConfig export: $text");
     Clipboard.setData(ClipboardData(text: text));
