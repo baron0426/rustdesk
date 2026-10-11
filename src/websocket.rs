@@ -1,6 +1,7 @@
 use crate::{
     config::{
-        keys::OPTION_RELAY_SERVER, use_ws, Config, Socks5Server, RELAY_PORT, RENDEZVOUS_PORT,
+        keys::{OPTION_RELAY_SERVER, OPTION_WEBSOCKET_ID_SERVER, OPTION_WEBSOCKET_RELAY_SERVER},
+        use_ws, Config, Socks5Server, RELAY_PORT, RENDEZVOUS_PORT,
     },
     protobuf::Message,
     socket_client::split_host_port,
@@ -360,6 +361,50 @@ pub fn is_ws_endpoint(endpoint: &str) -> bool {
     endpoint.starts_with("ws://") || endpoint.starts_with("wss://")
 }
 
+// A bare Host[:Port] uses TLS. Full URLs can select ws:// and a custom path.
+fn websocket_server_url(server: &str, relay: bool) -> ResultType<String> {
+    let server = server.trim();
+    if server.is_empty() || server.chars().any(char::is_whitespace) || server.contains('\\') {
+        bail!("Invalid WebSocket server");
+    }
+    let explicit_url = server.contains("://");
+    if !explicit_url && server.contains(&['/', '?', '#', '@'][..]) {
+        bail!("Use a full ws:// or wss:// URL for a custom path");
+    }
+    let input = if explicit_url {
+        server.to_owned()
+    } else {
+        format!("wss://{}", server)
+    };
+    let mut url = url::Url::parse(&input)?;
+    if !matches!(url.scheme(), "ws" | "wss")
+        || url.host_str().map_or(true, str::is_empty)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.port() == Some(0)
+    {
+        bail!("Invalid WebSocket server");
+    }
+    // Preserve an explicitly supplied path, including / for a native WS listener.
+    let authority_and_path = input.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+    let has_path = authority_and_path
+        .split(&['?', '#'][..])
+        .next()
+        .unwrap_or("")
+        .contains('/');
+    if !has_path {
+        url.set_path(if relay { "/ws/relay" } else { "/ws/id" });
+    }
+    Ok(url.to_string())
+}
+
+fn same_server_host(endpoint_host: &str, server: &str, default_port: i32) -> bool {
+    split_host_port(crate::socket_client::check_port(server, default_port))
+        .map(|(host, _)| host.eq_ignore_ascii_case(endpoint_host))
+        .unwrap_or(false)
+}
+
 /**
  * Core function to convert an endpoint to WebSocket format
  *
@@ -397,6 +442,39 @@ pub fn check_ws(endpoint: &str) -> String {
     let relay_port = split_host_port(&relay_server)
         .map(|(_, p)| p)
         .unwrap_or(RELAY_PORT);
+
+    let is_id_port = endpoint_port == rendezvous_port || endpoint_port == rendezvous_port - 1;
+    // Separate hosts may legitimately use the same native port.
+    let is_configured_relay = !relay_server.is_empty()
+        && endpoint_port == relay_port
+        && same_server_host(&endpoint_host, &relay_server, RELAY_PORT);
+    let is_configured_id =
+        is_id_port && same_server_host(&endpoint_host, &custom_rendezvous_server, RENDEZVOUS_PORT);
+    let relay = (is_configured_relay && !is_configured_id) || !is_id_port;
+    let native_server = if relay && !relay_server.is_empty() {
+        &relay_server
+    } else {
+        &custom_rendezvous_server
+    };
+    // Do not redirect peer-advertised relays on another server to our local override.
+    if same_server_host(
+        &endpoint_host,
+        native_server,
+        if relay { RELAY_PORT } else { RENDEZVOUS_PORT },
+    ) {
+        let option = if relay {
+            OPTION_WEBSOCKET_RELAY_SERVER
+        } else {
+            OPTION_WEBSOCKET_ID_SERVER
+        };
+        let server = Config::get_option(option);
+        if !server.trim().is_empty() {
+            match websocket_server_url(&server, relay) {
+                Ok(url) => return url,
+                Err(err) => log::warn!("Invalid {}: {}", option, err),
+            }
+        }
+    }
 
     let (relay, dst_port) = if endpoint_port == rendezvous_port {
         // rendezvous
@@ -440,6 +518,54 @@ mod tests {
     use crate::config::{keys, Config};
     use tokio::{io::AsyncWriteExt, net::TcpListener};
 
+    #[test]
+    fn test_websocket_server_url() {
+        for (input, relay, expected) in [
+            ("id.example:35018", false, "wss://id.example:35018/ws/id"),
+            (
+                "relay.example:35019",
+                true,
+                "wss://relay.example:35019/ws/relay",
+            ),
+            ("id.example", false, "wss://id.example/ws/id"),
+            ("ws://127.0.0.1:21118", false, "ws://127.0.0.1:21118/ws/id"),
+            ("ws://127.0.0.1:21118/", false, "ws://127.0.0.1:21118/"),
+            ("[::1]:35019", true, "wss://[::1]:35019/ws/relay"),
+            (
+                "wss://id.example:35018/custom/id?token=x",
+                false,
+                "wss://id.example:35018/custom/id?token=x",
+            ),
+        ] {
+            assert_eq!(websocket_server_url(input, relay).unwrap(), expected);
+        }
+        for input in [
+            "",
+            "https://id.example:35018",
+            "wss://",
+            "id.example:0",
+            "id.example:65536",
+            "id.example:abc",
+            "id.example/ws/id",
+            "wss://user:pass@id.example/ws/id",
+            "wss://id.example/#fragment",
+            "id .example:35018",
+            "wss://id.example\\path",
+        ] {
+            assert!(websocket_server_url(input, false).is_err(), "{}", input);
+        }
+        assert!(same_server_host(
+            "id.example",
+            "ID.EXAMPLE:35016",
+            RENDEZVOUS_PORT
+        ));
+        assert!(!same_server_host(
+            "other.example",
+            "id.example:35016",
+            RENDEZVOUS_PORT
+        ));
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn test_secured_stream_rejects_plaintext_text() {
         sodiumoxide::init().expect("failed to initialize sodiumoxide");
@@ -470,6 +596,8 @@ mod tests {
     #[test]
     fn test_check_ws() {
         let options = Config::get_options();
+        Config::set_option(OPTION_WEBSOCKET_ID_SERVER.to_owned(), String::new());
+        Config::set_option(OPTION_WEBSOCKET_RELAY_SERVER.to_owned(), String::new());
         // enable websocket
         Config::set_option(keys::OPTION_ALLOW_WEBSOCKET.to_string(), "Y".to_string());
 
@@ -598,6 +726,74 @@ mod tests {
         assert_eq!(check_ws("127.0.0.1:23455"), "ws://127.0.0.1:23458");
         assert_eq!(check_ws("127.0.0.1:23456"), "ws://127.0.0.1:23458");
         assert_eq!(check_ws("127.0.0.1:34567"), "ws://127.0.0.1:34569");
+        // Independent WS endpoints must not borrow native ports or API TLS settings.
+        Config::set_option("custom-rendezvous-server".into(), "id.example:35016".into());
+        Config::set_option(OPTION_RELAY_SERVER.into(), "relay.example:35017".into());
+        Config::set_option("api-server".into(), String::new());
+        Config::set_option(
+            OPTION_WEBSOCKET_ID_SERVER.into(),
+            "ws-id.example:35018".into(),
+        );
+        Config::set_option(
+            OPTION_WEBSOCKET_RELAY_SERVER.into(),
+            "wss://ws-relay.example:35019/custom/relay".into(),
+        );
+        assert_eq!(
+            check_ws("id.example:35016"),
+            "wss://ws-id.example:35018/ws/id"
+        );
+        assert_eq!(
+            check_ws("id.example:35015"),
+            "wss://ws-id.example:35018/ws/id"
+        );
+        assert_eq!(
+            check_ws("relay.example:35017"),
+            "wss://ws-relay.example:35019/custom/relay"
+        );
+        assert_eq!(
+            check_ws("other.example:35017"),
+            "ws://other.example/ws/relay"
+        );
+        assert_eq!(
+            check_ws("wss://explicit.example:444/path"),
+            "wss://explicit.example:444/path"
+        );
+
+        Config::set_option(keys::OPTION_ALLOW_WEBSOCKET.into(), "N".into());
+        assert_eq!(check_ws("id.example:35016"), "id.example:35016");
+        assert_eq!(check_ws("relay.example:35017"), "relay.example:35017");
+        Config::set_option(keys::OPTION_ALLOW_WEBSOCKET.into(), "Y".into());
+        Config::set_option(OPTION_WEBSOCKET_ID_SERVER.into(), String::new());
+        assert_eq!(check_ws("id.example:35016"), "ws://id.example/ws/id");
+        assert_eq!(
+            check_ws("relay.example:35017"),
+            "wss://ws-relay.example:35019/custom/relay"
+        );
+
+        // Without an explicit native relay, the ID host is the local relay host.
+        Config::set_option(OPTION_RELAY_SERVER.into(), String::new());
+        assert_eq!(
+            check_ws("id.example:35017"),
+            "wss://ws-relay.example:35019/custom/relay"
+        );
+
+        Config::set_option(
+            "custom-rendezvous-server".into(),
+            "[0:0:0:0:0:0:0:1]:35016".into(),
+        );
+        Config::set_option(
+            OPTION_WEBSOCKET_ID_SERVER.into(),
+            "ws://[::1]:35018/".into(),
+        );
+        assert_eq!(check_ws("[0:0:0:0:0:0:0:1]:35016"), "ws://[::1]:35018/");
+
+        Config::set_option("custom-rendezvous-server".into(), "id.example:35016".into());
+        Config::set_option(OPTION_RELAY_SERVER.into(), "relay.example:35016".into());
+        assert_eq!(
+            check_ws("relay.example:35016"),
+            "wss://ws-relay.example:35019/custom/relay"
+        );
+
         Config::set_options(options);
     }
     // A server-to-client frame is unmasked, so it can be put on the wire by hand: the header alone,
